@@ -61,7 +61,7 @@ func (l *CompliancePlugin) Eval(request *proto.EvalRequest, apiHelper runner.Api
 		errAcc = errors.Join(errAcc, err)
 	}
 
-	var clusterData map[string]interface{}
+	clusterData := make(map[string]interface{})
 
 	var podsMetaData []interface{}
 	for _, pod := range pods.Items {
