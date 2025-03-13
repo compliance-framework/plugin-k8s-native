@@ -61,13 +61,15 @@ func (l *CompliancePlugin) Eval(request *proto.EvalRequest, apiHelper runner.Api
 		errAcc = errors.Join(errAcc, err)
 	}
 
-	var podMetaData []map[string]interface{}
+	var clusterData map[string]interface{}
+
+	var podsMetaData []interface{}
 	for _, pod := range pods.Items {
 		for _, container := range pod.Spec.Containers {
 			l.logger.Debug("Pod: %s | Container: %s | Image: %s\n",
 				pod.Name, container.Name, container.Image)
 
-			podMetaData = append(podMetaData, map[string]interface{}{
+			podsMetaData = append(podsMetaData, map[string]interface{}{
 				"Name":  pod.Name,
 				"Image": container.Image,
 			})
@@ -75,167 +77,168 @@ func (l *CompliancePlugin) Eval(request *proto.EvalRequest, apiHelper runner.Api
 		}
 	}
 
-	l.logger.Debug("evaluating data", podMetaData)
+	clusterData["Pods"] = podsMetaData
+
+	l.logger.Debug("evaluating clusterData data", clusterData)
 
 	// Run policy checks
-	for _, instance := range podMetaData {
-		for _, policyPath := range request.GetPolicyPaths() {
-			results, err := policyManager.New(ctx, l.logger, policyPath).Execute(ctx, "compliance_plugin", instance)
-			if err != nil {
-				l.logger.Error("policy evaluation failed", "error", err)
-				evalStatus = proto.ExecutionStatus_FAILURE
-				errAcc = errors.Join(errAcc, err)
-				continue
+
+	for _, policyPath := range request.GetPolicyPaths() {
+		results, err := policyManager.New(ctx, l.logger, policyPath).Execute(ctx, "compliance_plugin", clusterData)
+		if err != nil {
+			l.logger.Error("policy evaluation failed", "error", err)
+			evalStatus = proto.ExecutionStatus_FAILURE
+			errAcc = errors.Join(errAcc, err)
+			continue
+		}
+
+		// Build and send results (this is also from your existing logic)
+		assessmentResult := runner.NewCallableAssessmentResult()
+		assessmentResult.Title = "K8S Native plugin"
+
+		for _, result := range results {
+
+			// There are no violations reported from the policies.
+			// We'll send the observation back to the agent
+			if len(result.Violations) == 0 {
+				title := "The plugin succeeded. No compliance issues to report."
+				assessmentResult.AddObservation(&proto.Observation{
+					Uuid:        uuid.New().String(),
+					Title:       &title,
+					Description: "The plugin policies did not return any violations. The configuration is in compliance with policies.",
+					Collected:   timestamppb.New(time.Now()),
+					Expires:     timestamppb.New(time.Now().AddDate(0, 1, 0)), // Add one month for the expiration
+					RelevantEvidence: []*proto.RelevantEvidence{
+						{
+							Description: fmt.Sprintf("Policy %v was evaluated, and no violations were found on machineId: %s", result.Policy.Package.PurePackage(), "ARN:12345"),
+						},
+					},
+					Labels: map[string]string{
+						"package": string(result.Policy.Package),
+						"type":    "k8s-native",
+						// "pod_name": fmt.Sprintf("%v", instance["Name"]),
+					},
+				})
+
+				status := runner.FindingTargetStatusSatisfied
+				assessmentResult.AddFinding(&proto.Finding{
+					Title:       fmt.Sprintf("No violations found on %s", result.Policy.Package.PurePackage()),
+					Description: fmt.Sprintf("No violations found on the %s policy within the Template Compliance Plugin.", result.Policy.Package.PurePackage()),
+					Target: &proto.FindingTarget{
+						Status: &proto.ObjectiveStatus{
+							State: status,
+						},
+					},
+					Labels: map[string]string{
+						"package": string(result.Policy.Package),
+						"type":    "k8s-native",
+						// "pod_name": fmt.Sprintf("%v", instance["Name"]),
+					},
+				})
 			}
 
-			// Build and send results (this is also from your existing logic)
-			assessmentResult := runner.NewCallableAssessmentResult()
-			assessmentResult.Title = "K8S Native plugin"
+			// There are violations in the policy checks.
+			// We'll send these observations back to the agent
+			if len(result.Violations) > 0 {
+				title := fmt.Sprintf("The plugin found violations for policy %s on machineId: %s", result.Policy.Package.PurePackage(), "ARN:12345")
+				observationUuid := uuid.New().String()
+				assessmentResult.AddObservation(&proto.Observation{
+					Uuid:        observationUuid,
+					Title:       &title,
+					Description: fmt.Sprintf("Observed %d violation(s) for policy %s", len(result.Violations), result.Policy.Package.PurePackage()),
+					Collected:   timestamppb.New(time.Now()),
+					Expires:     timestamppb.New(time.Now().AddDate(0, 1, 0)), // Add one month for the expiration
+					RelevantEvidence: []*proto.RelevantEvidence{
+						{
+							Description: fmt.Sprintf("Policy %v was evaluated, and %d violations were found", result.Policy.Package.PurePackage(), len(result.Violations)),
+						},
+					},
+					Labels: map[string]string{
+						"package": string(result.Policy.Package),
+						"type":    "k8s-native",
+						// "pod_name": fmt.Sprintf("%v", instance["Name"]),
+					},
+				})
 
-			for _, result := range results {
-
-				// There are no violations reported from the policies.
-				// We'll send the observation back to the agent
-				if len(result.Violations) == 0 {
-					title := "The plugin succeeded. No compliance issues to report."
-					assessmentResult.AddObservation(&proto.Observation{
-						Uuid:        uuid.New().String(),
-						Title:       &title,
-						Description: "The plugin policies did not return any violations. The configuration is in compliance with policies.",
-						Collected:   timestamppb.New(time.Now()),
-						Expires:     timestamppb.New(time.Now().AddDate(0, 1, 0)), // Add one month for the expiration
-						RelevantEvidence: []*proto.RelevantEvidence{
+				for _, violation := range result.Violations {
+					status := runner.FindingTargetStatusNotSatisfied
+					assessmentResult.AddFinding(&proto.Finding{
+						Title:       violation.Title,
+						Description: violation.Description,
+						Remarks:     &violation.Remarks,
+						RelatedObservations: []*proto.RelatedObservation{
 							{
-								Description: fmt.Sprintf("Policy %v was evaluated, and no violations were found on machineId: %s", result.Policy.Package.PurePackage(), "ARN:12345"),
+								ObservationUuid: observationUuid,
 							},
 						},
-						Labels: map[string]string{
-							"package":  string(result.Policy.Package),
-							"type":     "k8s-native",
-							"pod_name": fmt.Sprintf("%v", instance["Name"]),
-						},
-					})
-
-					status := runner.FindingTargetStatusSatisfied
-					assessmentResult.AddFinding(&proto.Finding{
-						Title:       fmt.Sprintf("No violations found on %s", result.Policy.Package.PurePackage()),
-						Description: fmt.Sprintf("No violations found on the %s policy within the Template Compliance Plugin.", result.Policy.Package.PurePackage()),
 						Target: &proto.FindingTarget{
 							Status: &proto.ObjectiveStatus{
 								State: status,
 							},
 						},
 						Labels: map[string]string{
-							"package":  string(result.Policy.Package),
-							"type":     "k8s-native",
-							"pod_name": fmt.Sprintf("%v", instance["Name"]),
+							"package": string(result.Policy.Package),
+							"type":    "k8s-native",
+							// "pod_name": fmt.Sprintf("%v", instance["Name"]),
 						},
-					})
-				}
-
-				// There are violations in the policy checks.
-				// We'll send these observations back to the agent
-				if len(result.Violations) > 0 {
-					title := fmt.Sprintf("The plugin found violations for policy %s on machineId: %s", result.Policy.Package.PurePackage(), "ARN:12345")
-					observationUuid := uuid.New().String()
-					assessmentResult.AddObservation(&proto.Observation{
-						Uuid:        observationUuid,
-						Title:       &title,
-						Description: fmt.Sprintf("Observed %d violation(s) for policy %s", len(result.Violations), result.Policy.Package.PurePackage()),
-						Collected:   timestamppb.New(time.Now()),
-						Expires:     timestamppb.New(time.Now().AddDate(0, 1, 0)), // Add one month for the expiration
-						RelevantEvidence: []*proto.RelevantEvidence{
-							{
-								Description: fmt.Sprintf("Policy %v was evaluated, and %d violations were found", result.Policy.Package.PurePackage(), len(result.Violations)),
-							},
-						},
-						Labels: map[string]string{
-							"package":  string(result.Policy.Package),
-							"type":     "k8s-native",
-							"pod_name": fmt.Sprintf("%v", instance["Name"]),
-						},
-					})
-
-					for _, violation := range result.Violations {
-						status := runner.FindingTargetStatusNotSatisfied
-						assessmentResult.AddFinding(&proto.Finding{
-							Title:       violation.Title,
-							Description: violation.Description,
-							Remarks:     &violation.Remarks,
-							RelatedObservations: []*proto.RelatedObservation{
-								{
-									ObservationUuid: observationUuid,
-								},
-							},
-							Target: &proto.FindingTarget{
-								Status: &proto.ObjectiveStatus{
-									State: status,
-								},
-							},
-							Labels: map[string]string{
-								"package":  string(result.Policy.Package),
-								"type":     "k8s-native",
-								"pod_name": fmt.Sprintf("%v", instance["Name"]),
-							},
-						})
-					}
-				}
-
-				for _, risk := range result.Risks {
-					links := []*proto.Link{}
-					for _, link := range risk.Links {
-						links = append(links, &proto.Link{
-							Href: link.URL,
-							Text: &link.Text,
-						})
-					}
-
-					assessmentResult.AddRiskEntry(&proto.Risk{
-						Title:       risk.Title,
-						Description: risk.Description,
-						Statement:   risk.Statement,
-						Props:       []*proto.Property{},
-						Links:       links,
 					})
 				}
 			}
 
-			assessmentResult.Start = timestamppb.New(startTime)
+			for _, risk := range result.Risks {
+				links := []*proto.Link{}
+				for _, link := range risk.Links {
+					links = append(links, &proto.Link{
+						Href: link.URL,
+						Text: &link.Text,
+					})
+				}
 
-			var endTime = time.Now()
-			assessmentResult.End = timestamppb.New(endTime)
+				assessmentResult.AddRiskEntry(&proto.Risk{
+					Title:       risk.Title,
+					Description: risk.Description,
+					Statement:   risk.Statement,
+					Props:       []*proto.Property{},
+					Links:       links,
+				})
+			}
+		}
 
-			streamId, err := sdk.SeededUUID(map[string]string{
+		assessmentResult.Start = timestamppb.New(startTime)
+
+		var endTime = time.Now()
+		assessmentResult.End = timestamppb.New(endTime)
+
+		streamId, err := sdk.SeededUUID(map[string]string{
+			"type":    "k8s-native",
+			"_policy": policyPath,
+		})
+		if err != nil {
+			l.logger.Error("Failed to seedUUID", "error", err)
+			evalStatus = proto.ExecutionStatus_FAILURE
+			errAcc = errors.Join(errAcc, err)
+			continue
+		}
+
+		assessmentResult.AddLogEntry(&proto.AssessmentLog_Entry{
+			Title:       protolang.String("Template check"),
+			Description: protolang.String("Template plugin checks completed successfully"),
+			Start:       timestamppb.New(startTime),
+			End:         timestamppb.New(endTime),
+		})
+
+		err = apiHelper.CreateResult(
+			streamId.String(),
+			map[string]string{
 				"type":    "k8s-native",
 				"_policy": policyPath,
-			})
-			if err != nil {
-				l.logger.Error("Failed to seedUUID", "error", err)
-				evalStatus = proto.ExecutionStatus_FAILURE
-				errAcc = errors.Join(errAcc, err)
-				continue
-			}
-
-			assessmentResult.AddLogEntry(&proto.AssessmentLog_Entry{
-				Title:       protolang.String("Template check"),
-				Description: protolang.String("Template plugin checks completed successfully"),
-				Start:       timestamppb.New(startTime),
-				End:         timestamppb.New(endTime),
-			})
-
-			err = apiHelper.CreateResult(
-				streamId.String(),
-				map[string]string{
-					"type":    "k8s-native",
-					"_policy": policyPath,
-				},
-				policyPath,
-				assessmentResult.Result())
-			if err != nil {
-				l.logger.Error("Failed to add assessment result", "error", err)
-				evalStatus = proto.ExecutionStatus_FAILURE
-				errAcc = errors.Join(errAcc, err)
-			}
+			},
+			policyPath,
+			assessmentResult.Result())
+		if err != nil {
+			l.logger.Error("Failed to add assessment result", "error", err)
+			evalStatus = proto.ExecutionStatus_FAILURE
+			errAcc = errors.Join(errAcc, err)
 		}
 	}
 
