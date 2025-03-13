@@ -65,14 +65,10 @@ func (l *CompliancePlugin) Eval(request *proto.EvalRequest, apiHelper runner.Api
 	var podsMetaData []interface{}
 	for _, pod := range pods.Items {
 		for _, container := range pod.Spec.Containers {
-			l.logger.Debug("Pod: %s | Container: %s | Image: %s\n",
-				pod.Name, container.Name, container.Image)
-
 			podsMetaData = append(podsMetaData, map[string]interface{}{
 				"Name":  pod.Name,
 				"Image": container.Image,
 			})
-
 		}
 	}
 
