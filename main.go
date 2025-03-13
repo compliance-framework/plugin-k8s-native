@@ -57,8 +57,11 @@ func (l *CompliancePlugin) Eval(request *proto.EvalRequest, apiHelper runner.Api
 	// Iterate through pods and extract container images
 	for _, pod := range pods.Items {
 		for _, container := range pod.Spec.Containers {
-			l.logger.Debug("Pod: %s | Container: %s | Image: %s\n",
-				pod.Name, container.Name, container.Image)
+			// l.logger.Debug("Pod: %s | Container: %s | Image: %s\n",
+			// 	pod.Name, container.Name, container.Image)
+			l.logger.Debug("Pod: ", pod.Name)
+			l.logger.Debug("Container ", container.Name)
+			l.logger.Debug("Image: ", container.Image)
 		}
 	}
 
