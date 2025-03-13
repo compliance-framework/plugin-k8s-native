@@ -62,7 +62,6 @@ func (l *CompliancePlugin) Eval(request *proto.EvalRequest, apiHelper runner.Api
 	}
 
 	clusterData := make(map[string]interface{})
-
 	var podsMetaData []interface{}
 	for _, pod := range pods.Items {
 		for _, container := range pod.Spec.Containers {
@@ -75,6 +74,15 @@ func (l *CompliancePlugin) Eval(request *proto.EvalRequest, apiHelper runner.Api
 			})
 
 		}
+	}
+
+	_, err = clientset.RbacV1().ClusterRoles().List(context.TODO(), metav1.ListOptions{})
+	if err != nil {
+		l.logger.Info("RBAC not enabled", err)
+		clusterData["RBACEnabled"] = false
+	} else {
+		l.logger.Info("RBAC enabled", err)
+		clusterData["RBACEnabled"] = true
 	}
 
 	clusterData["Pods"] = podsMetaData
