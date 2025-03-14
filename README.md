@@ -1,8 +1,4 @@
-# Compliance Framework Plugin Template
-
-This is a template for building a compliance framework plugin.
-
-Inspect main.go for a detailed description of how to build the plugin.
+# Compliance Framework K8s native plugin
 
 ## Prerequisites
 
@@ -16,25 +12,44 @@ Once you are ready to serve the plugin, you need to build the binaries which can
 goreleaser release --snapshot --clean
 ```
 
-## Usage
+## Configure with minikube
 
-You can use this plugin by passing it to the compliiance agent
+Spin minikube using `minikube start`. If you want minikube to be accessible from other devices on your network use the `--network=bridged` flag.
 
-```shell
-agent --plugin=[PATH_TO_YOUR_BINARY]
+Create an nginx deployment and apply the below YAML file to create an nginx deployment `kubectl apply -f nginx-deployment.yaml`
+
+Example nginx deployment:
+
+```
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nginx-deployment
+  labels:
+    app: nginx
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: nginx
+  template:
+    metadata:
+      labels:
+        app: nginx
+    spec:
+      containers:
+      - name: nginx
+        image: ubuntu:jammy
+        command: ["/bin/bash", "-c", "sleep infinity"]
+        tty: true
+        ports:
+        - containerPort: 80
 ```
 
-## Releasing
+Execute a shell session inside one of the Nginx pods using `kubectl exec -it <pod-name> -- bash`
 
-This plugin is released using goreleaser to build binaries, and Docker to build OCI artifacts (WIP), which will ensure a binary is built for most OS and Architecture combinations.
+Create a directory inside the pod `mkdir /app`
 
-You can find the binaries on each release of this plugin in the GitHub releases page.
+Copy the compiled agent and plugin into the the app directory, as well as the config.yaml and policies, for example `kubectl cp plugin default/<pod-name>:/app/`. This example assumes the default namespace. If using a different namespace, please specify.
 
-You can find the OCI implementations in the GitHub Packages page.
-
-[Not Yet Implemented] To run this plugin with the Compliance Agent, you can specify the release. The agent will take care of pulling the correct binary.
-
-```shell
-concom agent --plugin=https://github.com/compliance-framework/plugin-template/releases/tag/0.0.1
-```
-
+Run the agent within the kubernetes pod using `./agent agent -c config.yaml`
