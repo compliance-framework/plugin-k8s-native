@@ -3,8 +3,8 @@ module github.com/compliance-framework/plugin-k8s-native
 go 1.23.2
 
 require (
-	github.com/compliance-framework/agent v0.0.15
-	github.com/compliance-framework/configuration-service v0.0.5
+	github.com/compliance-framework/agent v0.1.0
+	github.com/compliance-framework/configuration-service v0.1.0
 	github.com/google/uuid v1.6.0
 	github.com/hashicorp/go-hclog v1.5.0
 	github.com/hashicorp/go-plugin v1.6.2
