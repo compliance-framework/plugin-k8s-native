@@ -262,13 +262,13 @@ func (l *CompliancePlugin) EvaluatePolicies(ctx context.Context, request *proto.
 			}
 
 			if len(result.Violations) == 0 {
-				observation.Title = internal.StringAddressed(fmt.Sprintf("Local SSH Validation on %s passed.", result.Policy.Package.PurePackage()))
-				observation.Description = fmt.Sprintf("Observed no violations on the %s policy within the Local SSH Compliance Plugin.", result.Policy.Package.PurePackage())
+				observation.Title = internal.StringAddressed(fmt.Sprintf("K8S Native Validation on %s passed.", result.Policy.Package.PurePackage()))
+				observation.Description = fmt.Sprintf("Observed no violations on the %s policy within the K8S Native Compliance Plugin.", result.Policy.Package.PurePackage())
 				observations = append(observations, &observation)
 
 				finding := newFinding()
 				finding.Title = fmt.Sprintf("No violations found on %s", result.Policy.Package.PurePackage())
-				finding.Description = fmt.Sprintf("No violations found on the %s policy within the Local SSH Compliance Plugin.", result.Policy.Package.PurePackage())
+				finding.Description = fmt.Sprintf("No violations found on the %s policy within the K8S Native Compliance Plugin.", result.Policy.Package.PurePackage())
 				finding.Status = &proto.FindingStatus{
 					State: runner.FindingTargetStatusSatisfied,
 				}
@@ -278,7 +278,7 @@ func (l *CompliancePlugin) EvaluatePolicies(ctx context.Context, request *proto.
 
 			if len(result.Violations) > 0 {
 				observation.Title = internal.StringAddressed(fmt.Sprintf("Validation on %s failed.", result.Policy.Package.PurePackage()))
-				observation.Description = fmt.Sprintf("Observed %d violation(s) on the %s policy within the Local SSH Compliance Plugin.", len(result.Violations), result.Policy.Package.PurePackage())
+				observation.Description = fmt.Sprintf("Observed %d violation(s) on the %s policy within the K8S Native Compliance Plugin.", len(result.Violations), result.Policy.Package.PurePackage())
 				observations = append(observations, &observation)
 
 				for _, violation := range result.Violations {
