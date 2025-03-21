@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	policyManager "github.com/compliance-framework/agent/policy-manager"
@@ -42,12 +43,20 @@ func (l *CompliancePlugin) Eval(request *proto.EvalRequest, apiHelper runner.Api
 			Status: proto.ExecutionStatus_FAILURE,
 		}, err
 	}
-	if err = apiHelper.CreateObservationsAndFindings(ctx, observations, findings); err != nil {
-		l.logger.Error("Failed to send compliance validation results", "error", err)
+	if err = apiHelper.CreateFindings(ctx, findings); err != nil {
+		l.logger.Error("Failed to send compliance findings", "error", err)
 		return &proto.EvalResponse{
 			Status: proto.ExecutionStatus_FAILURE,
 		}, err
 	}
+
+	if err = apiHelper.CreateObservations(ctx, observations); err != nil {
+		l.logger.Error("Failed to send compliance observations", "error", err)
+		return &proto.EvalResponse{
+			Status: proto.ExecutionStatus_FAILURE,
+		}, err
+	}
+
 	return &proto.EvalResponse{
 		Status: proto.ExecutionStatus_SUCCESS,
 	}, err
@@ -118,50 +127,29 @@ func (l *CompliancePlugin) EvaluatePolicies(ctx context.Context, request *proto.
 	clusterData["Pods"] = podsMetaData
 
 	l.logger.Debug("evaluating clusterData data", clusterData)
-	for _, policyPath := range request.GetPolicyPaths() {
 
-		// ACTIVITY: policy bundle info
-		policyBundleSteps := make([]*proto.Step, 0)
-		policyBundleSteps = append(policyBundleSteps, &proto.Step{
-			Title:       "Compile policy bundle",
-			Description: "Using a locally addressable policy path, compile the policy files to an in memory executable.",
-		})
-		policyBundleSteps = append(policyBundleSteps, &proto.Step{
-			Title:       "Execute policy bundle",
-			Description: "Using previously collected JSON-formatted POD configurations, execute the compiled policies",
-		})
-		results, err := policyManager.New(ctx, l.logger, policyPath).Execute(ctx, "compliance_plugin", clusterData)
-		if err != nil {
-			l.logger.Error("policy evaluation failed", "error", err)
-			errAcc = errors.Join(errAcc, err)
-			return observations, findings, errAcc
-		}
-		activities = append(activities, &proto.Activity{
-			Title:       "Execute policy",
-			Description: "Prepare and compile policy bundles, and execute them using the prepared POD configuration data",
-			Steps:       policyBundleSteps,
-		})
-		l.logger.Debug("local k8s evaluation completed", "results", results)
+	subjectAttributeMap := map[string]string{
+		"type":     "k8s-native-env",
+		"pod_name": "name",
+	}
 
-		subjectAttributeMap := map[string]string{
-			"type": "k8s-native-env",
-		}
-
-		subjects := []*proto.SubjectReference{
-			{
-				Type:       "deployment-instance",
-				Attributes: subjectAttributeMap,
-				Title:      internal.StringAddressed("Deployment Instance"),
-				Remarks:    internal.StringAddressed("A k8s deployment running checks against cluster/pod configuration"),
-				Props: []*proto.Property{
-					{
-						Name:    "deployment-instance",
-						Value:   agentPodName,
-						Remarks: internal.StringAddressed("The local hostname of the machine where the plugin has been executed"),
-					},
+	subjects := []*proto.SubjectReference{
+		{
+			Type:       "deployment-instance",
+			Attributes: subjectAttributeMap,
+			Title:      internal.StringAddressed("Deployment Instance"),
+			Remarks:    internal.StringAddressed("A k8s deployment running checks against cluster/pod configuration"),
+			Props: []*proto.Property{
+				{
+					Name:    "deployment-instance",
+					Value:   agentPodName,
+					Remarks: internal.StringAddressed("The local hostname of the machine where the plugin has been executed"),
 				},
 			},
-		}
+		},
+	}
+
+	for _, policyPath := range request.GetPolicyPaths() {
 		actors := []*proto.OriginActor{
 			{
 				Title: "The Continuous Compliance Framework",
@@ -188,16 +176,190 @@ func (l *CompliancePlugin) EvaluatePolicies(ctx context.Context, request *proto.
 				Props: nil,
 			},
 		}
+
+		if strings.Contains(policyPath, "k8s_pods") {
+			pods, ok := clusterData["Pods"].([]interface{})
+			if !ok {
+				fmt.Println("Error: clusterData[\"Pods\"] is not of type []interface{}")
+				continue
+			}
+
+			components := []*proto.ComponentReference{
+				{
+					Identifier: "common-components/kubernetes-pods",
+				},
+			}
+
+			for _, pod := range pods {
+				podData, ok := pod.(map[string]interface{})
+				if !ok {
+					fmt.Println("Error: pod is not of type map[string]interface{}")
+					continue
+				}
+				podResults, err := policyManager.New(ctx, l.logger, policyPath).Execute(ctx, "compliance_plugin", podData)
+
+				policyBundleSteps := make([]*proto.Step, 0)
+				policyBundleSteps = append(policyBundleSteps, &proto.Step{
+					Title:       "Compile policy bundle",
+					Description: "Using a locally addressable policy path, compile the policy files to an in memory executable.",
+				})
+				policyBundleSteps = append(policyBundleSteps, &proto.Step{
+					Title:       "Execute policy bundle",
+					Description: "Using previously collected JSON-formatted POD configurations, execute the compiled policies",
+				})
+				activities = append(activities, &proto.Activity{
+					Title:       "Execute policy",
+					Description: "Prepare and compile policy bundles, and execute them using the prepared POD configuration data",
+					Steps:       policyBundleSteps,
+				})
+				l.logger.Debug("local kubernetes pod policy runs completed", "results", podResults)
+
+				activities = append(activities, &proto.Activity{
+					Title:       "Compile Results",
+					Description: "Using the output from policy execution, compile the resulting output to Observations and Findings, marking any violations, risks, and other OSCAL-familiar data",
+					Steps:       policyBundleSteps,
+				})
+
+				fmt.Println("Pod Name:", podData["Name"])
+				fmt.Println("Pod Image:", podData["Image"])
+				if err != nil {
+					l.logger.Error("policy evaluation for pod failed", "error", err)
+					errAcc = errors.Join(errAcc, err)
+					return observations, findings, errAcc
+				}
+
+				for _, podResult := range podResults {
+					observationUUIDMap := internal.MergeMaps(subjectAttributeMap, map[string]string{
+						"type":        "observation",
+						"policy":      podResult.Policy.Package.PurePackage(),
+						"policy_file": podResult.Policy.File,
+						"policy_path": policyPath,
+					})
+					observationUUID, err := sdk.SeededUUID(observationUUIDMap)
+					if err != nil {
+						errAcc = errors.Join(errAcc, err)
+						// We've been unable to do much here, but let's try the next one regardless.
+						continue
+					}
+
+					findingUUIDMap := internal.MergeMaps(subjectAttributeMap, map[string]string{
+						"type":        "finding",
+						"policy":      podResult.Policy.Package.PurePackage(),
+						"policy_file": podResult.Policy.File,
+						"policy_path": policyPath,
+					})
+					findingUUID, err := sdk.SeededUUID(findingUUIDMap)
+					if err != nil {
+						errAcc = errors.Join(errAcc, err)
+						// We've been unable to do much here, but let's try the next one regardless.
+						continue
+					}
+
+					observation := proto.Observation{
+						ID:         uuid.New().String(),
+						UUID:       observationUUID.String(),
+						Collected:  timestamppb.New(startTime),
+						Expires:    timestamppb.New(startTime.Add(24 * time.Hour)),
+						Origins:    []*proto.Origin{{Actors: actors}},
+						Subjects:   subjects,
+						Activities: activities,
+						Components: components,
+						RelevantEvidence: []*proto.RelevantEvidence{
+							{
+								Description: fmt.Sprintf("Policy %v was executed against the K8S configuration, using the K8S Native Compliance Plugin", podResult.Policy.Package.PurePackage()),
+							},
+						},
+					}
+
+					newFinding := func() *proto.Finding {
+						return &proto.Finding{
+							ID:        uuid.New().String(),
+							UUID:      findingUUID.String(),
+							Collected: timestamppb.New(time.Now()),
+							Labels: map[string]string{
+								"type":         "k8s-native",
+								"host":         agentPodName,
+								"_policy":      podResult.Policy.Package.PurePackage(),
+								"_policy_path": podResult.Policy.File,
+							},
+							Origins:             []*proto.Origin{{Actors: actors}},
+							Subjects:            subjects,
+							Components:          components,
+							RelatedObservations: []*proto.RelatedObservation{{ObservationUUID: observation.ID}},
+							Controls:            nil,
+						}
+					}
+
+					if len(podResult.Violations) == 0 {
+						observation.Title = internal.StringAddressed(fmt.Sprintf("K8S Native Validation on %s passed.", podResult.Policy.Package.PurePackage()))
+						observation.Description = fmt.Sprintf("Observed no violations on the %s policy within the K8S Native Compliance Plugin.", podResult.Policy.Package.PurePackage())
+						observations = append(observations, &observation)
+
+						finding := newFinding()
+						finding.Title = fmt.Sprintf("No violations found on %s", podResult.Policy.Package.PurePackage())
+						finding.Description = fmt.Sprintf("No violations found on the %s policy within the K8S Native Compliance Plugin.", podResult.Policy.Package.PurePackage())
+						finding.Status = &proto.FindingStatus{
+							State: runner.FindingTargetStatusSatisfied,
+						}
+						findings = append(findings, finding)
+						continue
+					}
+
+					if len(podResult.Violations) > 0 {
+						observation.Title = internal.StringAddressed(fmt.Sprintf("Validation on %s failed.", podResult.Policy.Package.PurePackage()))
+						observation.Description = fmt.Sprintf("Observed %d violation(s) on the %s policy within the K8S Native Compliance Plugin.", len(podResult.Violations), podResult.Policy.Package.PurePackage())
+						observations = append(observations, &observation)
+
+						for _, violation := range podResult.Violations {
+							finding := newFinding()
+							finding.Title = violation.Title
+							finding.Description = violation.Description
+							finding.Remarks = internal.StringAddressed(violation.Remarks)
+							finding.Status = &proto.FindingStatus{
+								State: runner.FindingTargetStatusNotSatisfied,
+							}
+							findings = append(findings, finding)
+						}
+					}
+				}
+
+			}
+		}
+		// Cluster
 		components := []*proto.ComponentReference{
 			{
-				Identifier: "common-components/k8s-native",
+				Identifier: "common-components/kubernetes-cluster",
 			},
 		}
+
+		results, err := policyManager.New(ctx, l.logger, policyPath).Execute(ctx, "compliance_plugin", clusterData)
+		policyBundleSteps := make([]*proto.Step, 0)
+		policyBundleSteps = append(policyBundleSteps, &proto.Step{
+			Title:       "Compile policy bundle",
+			Description: "Using a locally addressable policy path, compile the policy files to an in memory executable.",
+		})
+		policyBundleSteps = append(policyBundleSteps, &proto.Step{
+			Title:       "Execute policy bundle",
+			Description: "Using previously collected JSON-formatted POD configurations, execute the compiled policies",
+		})
+		activities = append(activities, &proto.Activity{
+			Title:       "Execute policy",
+			Description: "Prepare and compile policy bundles, and execute them using the prepared POD configuration data",
+			Steps:       policyBundleSteps,
+		})
+		l.logger.Debug("local kubernetes pod policy runs completed", "results", results)
+
 		activities = append(activities, &proto.Activity{
 			Title:       "Compile Results",
 			Description: "Using the output from policy execution, compile the resulting output to Observations and Findings, marking any violations, risks, and other OSCAL-familiar data",
 			Steps:       policyBundleSteps,
 		})
+
+		if err != nil {
+			l.logger.Error("policy evaluation for pod failed", "error", err)
+			errAcc = errors.Join(errAcc, err)
+			return observations, findings, errAcc
+		}
 
 		for _, result := range results {
 			observationUUIDMap := internal.MergeMaps(subjectAttributeMap, map[string]string{
@@ -292,7 +454,6 @@ func (l *CompliancePlugin) EvaluatePolicies(ctx context.Context, request *proto.
 					findings = append(findings, finding)
 				}
 			}
-
 		}
 
 	}
