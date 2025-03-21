@@ -64,7 +64,7 @@ func (l *CompliancePlugin) Eval(request *proto.EvalRequest, apiHelper runner.Api
 
 func (l *CompliancePlugin) EvaluatePolicies(ctx context.Context, request *proto.EvalRequest) ([]*proto.Observation, []*proto.Finding, error) {
 	startTime := time.Now()
-	agentPodName := os.Getenv("POD_NAME")
+	clusterName := os.Getenv("CLUSTER_NAME")
 	var errAcc error
 
 	activities := make([]*proto.Activity, 0)
@@ -222,8 +222,8 @@ func (l *CompliancePlugin) EvaluatePolicies(ctx context.Context, request *proto.
 						Remarks:    internal.StringAddressed("A k8s deployment running checks against pod configuration"),
 						Props: []*proto.Property{
 							{
-								Name:    fmt.Sprintf("%v", podData["Image"]),
-								Value:   agentPodName,
+								Name:    "pod_name",
+								Value:   fmt.Sprintf("%v", podData["Image"]),
 								Remarks: internal.StringAddressed("The pod of which the policy was executed against"),
 							},
 						},
@@ -433,7 +433,7 @@ func (l *CompliancePlugin) EvaluatePolicies(ctx context.Context, request *proto.
 						Collected: timestamppb.New(time.Now()),
 						Labels: map[string]string{
 							"type":         "k8s-native",
-							"host":         agentPodName,
+							"host":         clusterName,
 							"_policy":      result.Policy.Package.PurePackage(),
 							"_policy_path": result.Policy.File,
 						},
