@@ -3,8 +3,8 @@ module github.com/compliance-framework/plugin-k8s-native
 go 1.23.2
 
 require (
-	github.com/compliance-framework/agent v0.0.15
-	github.com/compliance-framework/configuration-service v0.0.5
+	github.com/compliance-framework/agent v0.1.1
+	github.com/compliance-framework/configuration-service v0.1.1
 	github.com/google/uuid v1.6.0
 	github.com/hashicorp/go-hclog v1.5.0
 	github.com/hashicorp/go-plugin v1.6.2
@@ -19,7 +19,6 @@ require (
 	github.com/beorn7/perks v1.0.1 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc // indirect
-	github.com/defenseunicorns/go-oscal v0.6.2 // indirect
 	github.com/emicklei/go-restful/v3 v3.10.1 // indirect
 	github.com/fatih/color v1.15.0 // indirect
 	github.com/go-ini/ini v1.67.0 // indirect
